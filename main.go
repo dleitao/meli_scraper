@@ -10,18 +10,17 @@ import (
 )
 
 var sellers map[string]int
+var m sync.Mutex
 
-func scrapSearchResults(url string, productsLinks *chan string) {
+func scrapSearchResults(url string, searchLinks, productsLinks *chan string) {
 	if url == "" {
 		log.Println("missing url argument")
 		return
 	}
 
-	log.Println("visiting", url)
-
 	c := colly.NewCollector()
 	c.OnHTML(".andes-pagination__button--next", func(e *colly.HTMLElement) {
-		go scrapSearchResults(e.ChildAttr(".andes-pagination__link", "href"), productsLinks)
+		*searchLinks <- e.ChildAttr(".andes-pagination__link", "href")
 	})
 	c.Visit(url)
 
@@ -33,7 +32,7 @@ func scrapSearchResults(url string, productsLinks *chan string) {
 
 }
 
-func getProductInfo(url string, wg *sync.WaitGroup, m *sync.Mutex) {
+func scrapProduct(url string) {
 
 	if url == "" {
 		log.Println("missing url argument")
@@ -54,34 +53,27 @@ func getProductInfo(url string, wg *sync.WaitGroup, m *sync.Mutex) {
 			sellers[id] = itemCount
 		}
 		m.Unlock()
-
-		wg.Done()
 	})
 	c.Visit(url)
 }
 
-func scrapProductPages(productsLinks *chan string, wg *sync.WaitGroup, m *sync.Mutex) {
-
-	for {
-		go func() {
-			select {
-			case url := <-*productsLinks:
-				wg.Add(1)
-				go getProductInfo(url, wg, m)
-			default:
-			}
-		}()
+func initScrapSearchResults(searchLinks, productsLinks *chan string) {
+	for url := range *searchLinks {
+		go scrapSearchResults(url, searchLinks, productsLinks)
 	}
+}
 
+func initScrapProduct(productsLinks *chan string) {
+	for url := range *productsLinks {
+		go scrapProduct(url)
+	}
 }
 
 func main() {
-	// https://celulares.mercadolibre.com.co/_Desde_451_BestSellers_YES
-	var wg sync.WaitGroup
-	var m sync.Mutex
 	productsLinks := make(chan string)
-	go scrapSearchResults("https://celulares.mercadolibre.com.co/_BestSellers_YES", &productsLinks)
-	go scrapProductPages(&productsLinks, &wg, &m)
-	wg.Wait()
+	searchLinks := make(chan string)
+	searchLinks <- "https://celulares.mercadolibre.com.co/_BestSellers_YES"
+	go initScrapSearchResults(&searchLinks, &productsLinks)
+	go initScrapProduct(&productsLinks)
 	log.Println(sellers)
 }
