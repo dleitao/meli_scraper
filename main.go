@@ -1,28 +1,48 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"regexp"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/gocolly/colly"
 )
 
 var sellers map[string]int
 var m sync.Mutex
+var countP int64
 
-func scrapSearchResults(url string, searchLinks, productsLinks *chan string) {
+var wg sync.WaitGroup
+var wgP sync.WaitGroup
+
+func scrapSearchResults(url string, searchLinks *chan string, productsLinks *chan string) {
 	if url == "" {
 		log.Println("missing url argument")
 		return
 	}
 
+	fmt.Println("visiting", url)
+
+	cls := true
 	c := colly.NewCollector()
+
 	c.OnHTML(".andes-pagination__button--next", func(e *colly.HTMLElement) {
-		*searchLinks <- e.ChildAttr(".andes-pagination__link", "href")
+		link := e.ChildAttr(".andes-pagination__link", "href")
+		*searchLinks <- link
+		cls = false
 	})
-	c.Visit(url)
+	err := c.Visit(url)
+	if err != nil {
+		fmt.Println("err", err)
+	}
+	if cls {
+		close(*searchLinks)
+		wg.Done()
+		return
+	}
 
 	c1 := colly.NewCollector()
 	c1.OnHTML(".ui-search-result__content-wrapper", func(e *colly.HTMLElement) {
@@ -33,6 +53,8 @@ func scrapSearchResults(url string, searchLinks, productsLinks *chan string) {
 }
 
 func scrapProduct(url string) {
+	atomic.AddInt64(&countP, 1)
+	defer wgP.Done()
 
 	if url == "" {
 		log.Println("missing url argument")
@@ -55,9 +77,10 @@ func scrapProduct(url string) {
 		m.Unlock()
 	})
 	c.Visit(url)
+
 }
 
-func initScrapSearchResults(searchLinks, productsLinks *chan string) {
+func initScrapSearchResults(searchLinks *chan string, productsLinks *chan string) {
 	for url := range *searchLinks {
 		go scrapSearchResults(url, searchLinks, productsLinks)
 	}
@@ -65,15 +88,31 @@ func initScrapSearchResults(searchLinks, productsLinks *chan string) {
 
 func initScrapProduct(productsLinks *chan string) {
 	for url := range *productsLinks {
+		wgP.Add(1)
 		go scrapProduct(url)
+
 	}
 }
 
 func main() {
-	productsLinks := make(chan string)
-	searchLinks := make(chan string)
-	searchLinks <- "https://celulares.mercadolibre.com.co/_BestSellers_YES"
+	fmt.Println("let's start")
+
+	productsLinks := make(chan string, 10)
+	searchLinks := make(chan string, 10)
+	sellers = make(map[string]int)
+	countP = 0
+
+	// searchLinks <- "https://celulares.mercadolibre.com.co/_BestSellers_YES"
+	searchLinks <- "https://celulares.mercadolibre.com.co/_Desde_1901_BestSellers_YES"
+
+	wg.Add(1)
+
 	go initScrapSearchResults(&searchLinks, &productsLinks)
 	go initScrapProduct(&productsLinks)
+
+	wg.Wait()
+	wgP.Wait()
+
 	log.Println(sellers)
+	fmt.Println(countP)
 }
