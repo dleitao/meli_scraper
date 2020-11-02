@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -11,12 +12,30 @@ import (
 	"github.com/gocolly/colly"
 )
 
-var sellers map[string]int
+var sellers map[string]seller
 var m sync.Mutex
 var countP int64
-
 var wg sync.WaitGroup
 var wgP sync.WaitGroup
+
+type seller struct {
+	id    string
+	count int
+}
+
+type sellerList []seller
+
+func (e sellerList) Len() int {
+	return len(e)
+}
+
+func (e sellerList) Less(i, j int) bool {
+	return e[i].count > e[j].count
+}
+
+func (e sellerList) Swap(i, j int) {
+	e[i], e[j] = e[j], e[i]
+}
 
 func scrapSearchResults(url string, searchLinks *chan string, productsLinks *chan string) {
 	if url == "" {
@@ -65,14 +84,15 @@ func scrapProduct(url string) {
 	c.OnHTML(".layout-col--right", func(e *colly.HTMLElement) {
 		re := regexp.MustCompile(`\d+`)
 		itemCount, _ := strconv.Atoi(string(re.Find([]byte(e.ChildText(".item-conditions")))))
-		id := e.ChildAttr("#seller-view-more-link", "href")
+		re1 := regexp.MustCompile("https://perfil.mercadolibre.com.co/")
+		id := re1.ReplaceAllLiteralString(e.ChildAttr("#seller-view-more-link", "href"), "")
 
 		m.Lock()
-		count, exists := sellers[id]
+		_, exists := sellers[id]
 		if exists {
-			sellers[id] = count + itemCount
+			sellers[id] = seller{id, sellers[id].count + itemCount}
 		} else {
-			sellers[id] = itemCount
+			sellers[id] = seller{id, itemCount}
 		}
 		m.Unlock()
 	})
@@ -93,17 +113,31 @@ func initScrapProduct(productsLinks *chan string) {
 
 	}
 }
+func getSortedSeller() []seller {
+
+	values := []seller{}
+	for _, value := range sellers {
+		values = append(values, value)
+	}
+	list := sellerList(values)
+	sort.Sort(list)
+	if len(list) < 200 {
+		return list
+	}
+	res := list[0:199]
+	return res
+}
 
 func main() {
 	fmt.Println("let's start")
 
-	productsLinks := make(chan string, 10)
+	productsLinks := make(chan string, 100)
 	searchLinks := make(chan string, 10)
-	sellers = make(map[string]int)
+	sellers = make(map[string]seller)
 	countP = 0
 
-	// searchLinks <- "https://celulares.mercadolibre.com.co/_BestSellers_YES"
-	searchLinks <- "https://celulares.mercadolibre.com.co/_Desde_1901_BestSellers_YES"
+	searchLinks <- "https://celulares.mercadolibre.com.co/_BestSellers_YES"
+	// searchLinks <- "https://celulares.mercadolibre.com.co/_Desde_1901_BestSellers_YES"
 
 	wg.Add(1)
 
@@ -113,6 +147,6 @@ func main() {
 	wg.Wait()
 	wgP.Wait()
 
-	log.Println(sellers)
-	fmt.Println(countP)
+	fmt.Println(getSortedSeller())
+	fmt.Println("#Products", countP)
 }
