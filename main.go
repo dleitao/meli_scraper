@@ -124,7 +124,7 @@ func getSortedSeller() []seller {
 	if len(list) < 200 {
 		return list
 	}
-	res := list[0:199]
+	res := list[0:99]
 	return res
 }
 
